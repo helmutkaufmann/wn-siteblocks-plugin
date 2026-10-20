@@ -62,31 +62,28 @@ class Plugin extends PluginBase
         try {
             // 1. Get the currently active theme
             // dd(config());
-            $activeTheme = config("cms.activeTheme");
+            $activeTheme = Theme::getActiveThemeCode();
             if (!$activeTheme) {
                 return;
             }
+	    $themeName=$activeTheme;
 
-            // 2. Define the path to your custom YAML file
-            $fieldsYamlPath = themes_path("$themeName/siteblocks.yaml");
+            $fieldNames = [];
 
-            // 3. Check if the file exists
-            if (!File::exists($fieldsYamlPath)) {
-                return;
+            // 2. Fields listed explicitly in the theme's siteblocks.yaml
+            $fieldsYamlPath = themes_path("$activeTheme/siteblocks.yaml");
+            if (File::exists($fieldsYamlPath)) {
+                $listed = Yaml::parseFile($fieldsYamlPath);
+                if (is_array($listed)) {
+                    $fieldNames = $listed;
+                }
             }
 
-            // 4. Parse the YAML file and catch parsing errors
+            // 3. Fields of type blocks/repeater found in the theme's form file
+            $fieldNames = array_merge($fieldNames, $this->detectBlockFields($activeTheme));
 
-            $fieldNames = Yaml::parseFile($fieldsYamlPath);
-
-            // 5. Ensure the parsed content is a valid, non-empty array
-            if (empty($fieldNames) || !is_array($fieldNames)) {
-                return;
-            }
-
-            // 6. Loop through each field name and extend the model
-            foreach ($fieldNames as $fieldName) {
-                // Ensure the field name is a non-empty string before processing
+            // 4. Register each field as jsonable on ThemeData
+            foreach (array_unique($fieldNames) as $fieldName) {
                 if (is_string($fieldName) && !empty($fieldName)) {
                     ThemeData::extend(function ($model) use ($fieldName) {
                         $model->addJsonable($fieldName);
@@ -97,5 +94,37 @@ class Plugin extends PluginBase
             Log::error("siteblocks: Error " . $e->getMessage());
             return;
         }
+    }
+
+    /**
+     * Returns the names of all blocks/repeater fields in the theme's form file.
+     */
+    protected function detectBlockFields(string $themeName): array
+    {
+        $themeYaml = themes_path("$themeName/theme.yaml");
+        if (!File::exists($themeYaml)) {
+            return [];
+        }
+
+        $form = (Yaml::parseFile($themeYaml)['form'] ?? null);
+        $formPath = is_string($form) ? themes_path("$themeName/$form") : null;
+        if (!$formPath || !File::exists($formPath)) {
+            return [];
+        }
+
+        $config = Yaml::parseFile($formPath);
+        $fields = array_merge(
+            $config['fields'] ?? [],
+            $config['tabs']['fields'] ?? [],
+            $config['secondaryTabs']['fields'] ?? []
+        );
+
+        $names = [];
+        foreach ($fields as $name => $definition) {
+            if (is_array($definition) && in_array(strtolower($definition['type'] ?? ''), ['blocks', 'repeater'], true)) {
+                $names[] = $name;
+            }
+        }
+        return $names;
     }
 }
